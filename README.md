@@ -2,7 +2,7 @@
 
 Entinostat decreases immune suppression to promote an anti-tumor response within a HER2+ breast tumor microenvironment.
 
-![image](https://user-images.githubusercontent.com/22621258/149673647-987d97f4-d3e3-4279-85c5-ff0eb4dd4ff8.png)
+![image](https://user-images.githubusercontent.com/22621258/149673679-ae72384b-1b74-40b2-8af1-145754728496.png)
 
 We use epigenetic modulation to sensitize HER2+ tumors to immune checkpoint inhibition in a breast 
 cancer model. We applied single cell RNA sequencing to elucidate the effects of epigenetic modulator 
