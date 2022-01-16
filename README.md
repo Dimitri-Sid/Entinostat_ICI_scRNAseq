@@ -1,6 +1,6 @@
 # Entinostat_ICI_scRNAseq
 
-_Entinostat decreases immune suppression to promote an anti-tumor response within a HER2+ breast tumor microenvironment. 
+Entinostat decreases immune suppression to promote an anti-tumor response within a HER2+ breast tumor microenvironment. 
 2022. _Cancer Immunology Research _
 Dimitrios N. Sidiropoulos, Christine I. Rafie4 ... Elana J. Fertig, & Evanthia T. Roussos Torres_
 
