@@ -11,7 +11,7 @@ Our results lead to a model that entinostat treatment promotes tumor killing mec
 an anti-tumor myeloid cell signature and reducing immunosuppression in MDSC cell subtypes. 
 The combined alterations in the myeloid compartment ultimately improve T cell infiltration and cytotoxicity.
 
-Data made available in [GEO]https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE166321 and [SRA]https://www.ncbi.nlm.nih.gov/sra?term=SRP304387
+Data made available in [GEO](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE166321) and [SRA](https://www.ncbi.nlm.nih.gov/sra?term=SRP304387)
 
 For any questions please email sdimitri [at] jhmi.edu and evanthia.roussostorres [at] med.usc.edu
 
