@@ -13,7 +13,7 @@ The combined alterations in the myeloid compartment ultimately improve T cell in
 
 Data available: 
 
-(GEO) ![GEO](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE166321)
+(GEO) https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE166321
 
 (SRA) https://www.ncbi.nlm.nih.gov/sra?term=SRP304387
 
