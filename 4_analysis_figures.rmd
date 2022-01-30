@@ -1,0 +1,1074 @@
+---
+title: "Entinostat and ICIs in Breast Cancer Mouse Model Single Cell Analysis"
+authors: "Dimitrios Sidiropoulos, Elana Fertig"
+date: "11/21/2021"
+subtitle: Post-processing
+output:
+  html_document:
+    df_print: kable
+    highlight: null
+    theme: cerulean
+    toc: yes
+    toc_depth: 4
+  pdf_document:
+    toc: yes
+    toc_depth: '4'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,cache.path = "/final_figures",root.dir = "/final_figures")
+knitr::opts_knit$set(root.dir =  "/Desktop/final_figures")
+```
+
+#### Load global packages and CDS objects
+```{r libraries}
+library(monocle3)
+library(ggplot2)
+library(ggrepel)
+library(EnhancedVolcano)
+library(tidyverse)
+library(viridis)
+library(patchwork)
+library(hrbrthemes)
+library(fmsb)
+library(colormap)
+library(dplyr)
+library(tidyr)
+library(Rfast)
+library(annotate)
+library(ggpubr)
+library(gage)
+library(reshape2)
+library(sva)
+library(ComplexHeatmap)
+library(circlize)
+library(limma)
+library(cowplot)
+library(pheatmap)
+library(fgsea)
+load("../Ent + ICIs mice project data and objects/broadCellTypesCDS_10_26_21.rda")
+load("../Ent + ICIs mice project data and objects/cds_myeloids_10_26_21.rda")
+load("../Ent + ICIs mice project data and objects/cds_lymphoids_10_26_21.rda")
+```
+
+#### Set colors
+```{r}
+# Define colors for cell types and treatments
+broad_cell_type_color <- c("Cancer" = "purple",
+                           "MDSCs" = "#53C0AD",
+                           "Lymphoids" = "#66B2FF",
+                           "Monocytes/Macrophages" = "#0066CC",
+                           "CAFs" = "#EFAD1E")
+
+treatment_color <- c("V" = "black",
+                     "E" = "darkgrey",
+                     "EC" = "blue",
+                     "EP" = "orange",
+                     "EPC" = "red")
+
+myeloid_color <- c("G-MDSC" = "#F0C61F",
+                           "M-MDSC" = "#FF8000",
+                           "DC" = "red",
+                           "M1" = "#FF6F6F",
+                           "M2" = "#00CCCC",
+                          "Prolif. Myeloid" = "#0E2E76",
+                           "Monocytes" = "#3333FF")
+
+lymphoid_color <- c("Treg" = "#114B2B",
+                   "Th" = "#FFCC99",
+                   "Tc" = "#10D2FF",
+                   "B" = "#04144C")
+```
+
+#### Functions
+```{r}
+DE_model <- function(object,control,treat,formula){  #differential expression models
+  celldat <- object[,colData(object)$treatment==control|colData(object)$treatment==treat]
+  gene_fits <- fit_models(celldat, model_formula_str = formula) 
+  fit_coefs <- coefficient_table(gene_fits)
+  terms <- fit_coefs %>% filter(!term == "(Intercept)") # remove intercept rows
+  terms <- terms %>% mutate(q_value = p.adjust(p_value))
+  terms <- data.frame(terms)
+  remove<-which(colnames(terms) == "model_summary" | colnames(terms) == "model")
+  terms<-terms[,-c(remove)] 
+  return(terms)
+}
+
+plot_pseudotime_umap <- function(object,pseudotime,title){
+  ggplot(data.frame(reducedDims(object)$UMAP),  aes(x = X1, y = X2, color = as.numeric(pseudotime)))+
+  geom_point(size = 1) +
+  theme_classic()+
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())+
+  scale_color_viridis(discrete = FALSE, option = "D")+
+  scale_fill_viridis(discrete = FALSE)+ggtitle(title)+ylab("UMAP2") + xlab("UMAP1")+labs(color = "Pseudotime")
+}
+
+plotNMF <- function(object,pattern,title,save){ #  UMAP with NMF pattern weights overlayed 
+  if(save=="yes"){
+    tiff(paste0(title,".tiff"))
+    print(ggplot(data.frame(reducedDims(object)$UMAP),  aes(x = X1, y = X2, color = pattern))+
+      geom_point(size = 0.5) +
+      theme_classics()+
+      theme(panel.grid.major = element_blank(),
+            panel.grid.minor = element_blank())+
+      scale_color_viridis(discrete = FALSE, option = "D")+
+      scale_fill_viridis(discrete = FALSE)+ggtitle(title)+ylab("UMAP2") + xlab("UMAP1")+labs(color = "Pattern Weight"))
+    dev.off()
+  } else {
+    ggplot(data.frame(reducedDims(object)$UMAP),  aes(x = X1, y = X2, color = pattern))+
+      geom_point(size = 0.5) +
+      theme_classic()+
+      theme(panel.grid.major = element_blank(),
+            panel.grid.minor = element_blank())+
+      scale_color_viridis(discrete = FALSE, option = "D")+
+      scale_fill_viridis(discrete = FALSE)+ggtitle(title)+ylab("UMAP2") + xlab("UMAP1")+labs(color = "Pattern Weight")
+  }
+}
+
+plotGenePseudo <- function(object,gene){ 
+  pdf(paste0(gene,"_by_pseudotime.pdf"))
+  print(plot_cells(object,genes=c(gene),cell_size = 1, show_trajectory_graph = FALSE))
+  my_genes <- object[row.names(subset(fData(object), gene_short_name %in% c(gene)))]
+  my_genes <- my_genes[, pData(my_genes)$treatment =="E" | pData(my_genes)$treatment =="V"]
+  pData(my_genes)$treatment <- factor(pData(my_genes)$treatment,levels = c("V", "E"))
+  print(plot_genes_violin(my_genes, group_cells_by="treatment")+scale_fill_manual(values = alpha(treatment_color))+stat_summary(fun=median,geom="point", shape=18,size=5,color="white")+ggtitle(gene))
+  my_genes <- cluster_cells(my_genes)
+  my_genes <- learn_graph(my_genes)
+  my_genes <- order_cells(my_genes)
+  print(plot_genes_in_pseudotime(my_genes, color_cells_by = "treatment",cell_size = 3)+scale_color_manual(values = alpha(treatment_color)))
+  dev.off()
+}
+
+trajInfer <- function(object,title){ #learns pseudotime, user picks start node, saves figure
+  object <-cluster_cells(object,resolution=1e-5) 
+  object<-learn_graph(object,use_partition = FALSE)
+  object<-order_cells(object)
+  pData(object)$pseudotime <- pseudotime(object)
+  tiff(paste0(title,".tiff"))
+  print(plot_cells(object, color_cells_by = "pseudotime",label_cell_groups=FALSE,label_leaves=FALSE,label_branch_points=FALSE, graph_label_size=1.5))
+  dev.off()
+  pData(object)$subset <- title
+  return(object)
+}
+
+preBayes=function(sampClasses,dat.rma){
+  forDesign <- as.character(na.omit(sampClasses))
+  forDesign <- factor(forDesign)####  here your levels are your classes
+  design <- model.matrix(~0+forDesign)
+  colnames(design) <- c(levels(forDesign))
+  fit = lmFit(dat.rma, design)
+  combos=combn(length(unique(sampClasses)),2) # calculate all pairwise permutations possible of groups
+  return(list(var1=combos,var2=fit,var3=design))
+} 
+
+plotFGSEAbarcode <- function(comparison,pathway,Title){
+              DE_results <- read.table(paste0("DE_output/",comparison,".txt")) # load differential expression results
+              DE_results <- DE_results %>% filter(status != "FAIL",  term != "runB", term != "runA" , term != "runpilot1" , term != "runpilot2")
+              gene_list = DE_results$estimate
+              names(gene_list) = toupper(as.character(DE_results$gene_short_name))
+              gene_list = gene_list[!duplicated(names(gene_list))]
+              gene_list = gene_list[!gene_list=="-Inf"]
+              pl <- plotEnrichment(pathway, gene_list)+ labs(title = Title)
+              pl + theme(plot.title = element_text(size=8)) + theme(axis.title.x = element_text(size=8))+theme(axis.text=element_text(size=8))
+}
+
+plotLimmaBarcode <- function(comparison,pathway,Title){
+              DE_results <- read.table(paste0("DE_output/",comparison,".txt")) # load differential expression results
+              DE_results <- DE_results %>% filter(status != "FAIL",  term != "runB", term != "runA" , term != "runpilot1" , term != "runpilot2")
+              DE_results <- DE_results[order(DE_results$estimate, decreasing=TRUE),]
+              Genes_index <- match(pathway, toupper(DE_results$gene_short_name))
+              Genes_index <- Genes_index[-which(is.na(Genes_index))]
+              barcodeplot(DE_results$estimate, index = Genes_index, main=Title)
+              wilcoxGST(Genes_index, DE_results$estimate)
+}
+
+plotVolcEstimate <- function(DE_table,Title){
+  EnhancedVolcano(DE_table,lab=NA,x = 'estimate', y = 'q_value',xlab = 'estimate', ylab = 'q_value',xlim = c(-2, 2),title = Title, pCutoff = 0.05,FCcutoff = 0.25,selectLab=rownames(DE_table),pointSize = 0,labSize = 5,maxoverlapsConnectors = 500,colAlpha = 1,
+                cutoffLineType = NA,cutoffLineCol = NA,cutoffLineWidth = 0.8,hlineWidth = 0.8,gridlines.major = FALSE,
+                gridlines.minor = FALSE,legendLabels=c('Not sig.','Estimate','q<0.05','q<0.05 & β>0.25'),)+
+  geom_text_repel(data=subset(DE_table,max.overlaps = 600,abs(estimate) >= 0.25 & q_value < 0.05),aes(estimate, -log10(q_value), label = gene_short_name),size = 4, color="red")
+}
+
+plotVolcFC<- function(DE_table,Title){
+  EnhancedVolcano(DE_table,lab = NA,x = 'log2FC', y = 'p_value',xlim = c(-1, 2),title = 'Volcano Plot for Entinostat Treated Cells vs. Vehicle Cancer Cells',pCutoff = 0.05,FCcutoff = 0.25,selectLab=rownames(DE_table),pointSize = 3.0,labSize = 4,colAlpha = 1,cutoffLineType = NULL,cutoffLineCol = NULL,cutoffLineWidth = 0.8,hlineWidth = 0.8,gridlines.major = FALSE,gridlines.minor = FALSE,legendLabels=c('Not sig.','Log (base 2) FC','p<0.05','p<0.05 & log2FC>0.25'),)+geom_text_repel(data=subset(DE_table,abs(log2FC) >= 0.25 & p_value < 0.05),aes(log2FC, -log10(p_value), label = gene_short_name),size = 4, color="red")
+}
+
+plotVolcEstimateGG <- function(DE_table,Title,top){
+  res_tableOE_ordered <- DE_table[order(DE_table$q_value), ] 
+  res_tableOE_ordered$genelabels <- ""
+  res_tableOE_ordered$genelabels[1:top] <- rownames(res_tableOE_ordered)[top]
+  ggplot(res_tableOE_ordered) +
+      geom_point(aes(x = estimate, y = -log10(q_value)),color="red") +
+      geom_text_repel(aes(x = estimate, y = -log10(q_value), label = ifelse(genelabels != "", rownames(res_tableOE_ordered),""))) +
+      ggtitle(Title) +
+      xlab("E vs. V Estimate") + 
+      ylab("-log10 q-value") +
+      theme(legend.position = "none",
+            plot.title = element_text(size = rel(1.5), hjust = 0.8),
+            axis.title = element_text(size = rel(1.25))) +theme_classic()
+}
+```
+
+
+#### Plot genes and metadata in UMAP and Violins
+```{r}
+#### broad
+plot_cells(cds,color_cells_by = "run",labels_per_group = 0,cell_size = 0.6, label_cell_groups = TRUE)
+genes <- c("Erbb2","Cdh1","Mmp2","Col12a1","Cd3e","Adgre1","Ccr5","Itgam", "Cd14","Cd84","Plac8","Il1b","Lyz2","Ctla4","Pdcd1")
+plot_cells(cds,genes= genes,labels_per_group = 0,cell_size = 0.6)
+genesCDS <- cds[row.names(subset(fData(cds), gene_short_name %in% genes)),]
+plot_genes_violin(genesCDS, group_cells_by="assigned_cell_type",ncol=3)+scale_fill_manual(values = alpha(broad_cell_type_color))+stat_summary(fun=median, geom="point", shape=18, size=5,color="white")+ggtitle("Checkpoint Expression")
+plot_cells(cds, group_cells_by="partition", color_cells_by="assigned_cell_type", cell_size = 0.5, group_label_size = 6)+scale_color_manual(values = broad_cell_type_color)
+
+#### myeloids
+plot_cells(cds_myeloids,genes=c("Tnf","Ly6g","Ly6c","Itgax","Flt3","Itgae","Ccr7","Cx3cr1","Ccr2","C1qc","Arg1","Arg2","Cd163","Mrc1","S100a9","H2-Ab1","Top2a","Ccl8","F13a1","Fcgrt"),show_trajectory_graph = FALSE,labels_per_group = 0, cell_size = 0.6)
+plot_cells(cds_myeloids, group_cells_by="cluster", color_cells_by="clusters", cell_size = 0.5, group_label_size = 7, show_trajectory_graph = FALSE)+scale_color_manual(values = myeloid_color)
+
+#### lymphoids
+plot_cells(cds_lymphoids,genes=c("Cd4", "Cd8a","Foxp3","Icos","Il2ra","Ctla4","Pdcd1","Cd19","Cd20","Ccl5"),labels_per_group = 0, cell_size = 0.8)
+plot_cells(cds_lymphoids, group_cells_by="cluster", color_cells_by="clusters", cell_size = 1.5, group_label_size = 7)+scale_color_manual(values = lymphoid_color)
+
+### checkpoint ligands
+my_genes <- cds[row.names(subset(fData(cds), gene_short_name %in% c("Pdcd1lg2"))),]
+plot_genes_violin(my_genes, group_cells_by="assigned_cell_type")+scale_fill_manual(values = alpha(broad_cell_type_color))+stat_summary(fun=median, geom="point", shape=18, size=5,color="white")+ggtitle("Checkpoint Ligand Expression")
+
+my_genes <- cds[row.names(subset(fData(cds), gene_short_name %in% c("Cd274"))),]
+plot_genes_violin(my_genes, group_cells_by="assigned_cell_type")+scale_fill_manual(values = alpha(broad_cell_type_color))+stat_summary(fun=median, geom="point", shape=18, size=5,color="white")+ggtitle("Checkpoint Ligand Expression")
+
+checkpoints = c("Cd274","Pdcd1lg2")
+plot_cells(cds,genes=checkpoints,cell_size = 1,label_groups_by_cluster = FALSE,labels_per_group = 0)
+plot_cells(cds_myeloids,genes=checkpoints,cell_size = 1,label_groups_by_cluster = FALSE,labels_per_group = 0)
+```
+
+
+#### Visualize CoGAPS NMF Patterns
+```{r}
+### CoGAPS was run on entire data on AWS using using the default parameters with 20 sets and 50 patterns. 37 patterns were returned.
+library(CoGAPS)
+gobj <- readRDS("cogaps_37patterns.rds")
+FL <- gobj@featureLoadings # gene pattern weights
+rownames(FL) <- fData(cds)[rownames(FL),]$gene_short_name
+# get top genes in patterns and combine into vector for heatmap
+topGenes <- c()
+for (pat in colnames(FL)){
+  ena <- FL[,pat]
+  names(ena) <- rownames(FL)
+  topGenes <- c(topGenes,names(ena[order(ena,decreasing=TRUE)])[1:5])
+}
+topGenes <- unique(topGenes)
+pheatmap(FL[topGenes,c("Pattern_14","Pattern_4","Pattern_25","Pattern_33")],scale="row")
+pheatmap(FL[topGenes,c("Pattern_5","Pattern_6","Pattern_10","Pattern_23","Pattern_36")],scale="row")
+
+# get patterns 
+pats <- data.frame(gobj@sampleFactors)
+pats <- pats[colnames(cds),]
+pats$assigned_cell_type <- pData(cds)$assigned_cell_type
+pats$treatment <- pData(cds)$treatment
+plotNMF(cds,pats$Pattern_14,"Pattern 14","yes")
+plotNMF(cds,pats$Pattern_25,"Pattern 25","yes")
+plotNMF(cds,pats$Pattern_4,"Pattern 4","yes")
+
+# UMAPs colored by pattern weights 
+p1 <- ggplot(pats, aes(x=assigned_cell_type, y=Pattern_14,color=assigned_cell_type)) + 
+    geom_boxplot(outlier.shape=NA) + #avoid plotting outliers twice
+    geom_jitter(position=position_jitter(width=.1, height=0),alpha=0.01)+theme_classic()+scale_color_manual(values = broad_cell_type_color)+ylab("Pattern 14")+ theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank())+theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank())+ theme(axis.title.x=element_blank(),axis.text.x=element_blank(),axis.ticks.x=element_blank())
+
+p2 <- ggplot(pats, aes(x=assigned_cell_type, y=Pattern_4,color=assigned_cell_type)) + 
+    geom_boxplot(outlier.shape=NA) + #avoid plotting outliers twice
+    geom_jitter(position=position_jitter(width=.1, height=0),alpha=0.01)+theme_classic()+scale_color_manual(values = broad_cell_type_color)+ylab("Pattern 4")+ theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank())+theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank())+ theme(axis.title.x=element_blank(),axis.text.x=element_blank(),axis.ticks.x=element_blank())
+
+p3 <- ggplot(pats, aes(x=assigned_cell_type, y=Pattern_25,color=assigned_cell_type)) + 
+    geom_boxplot(outlier.shape=NA) + #avoid plotting outliers twice
+    geom_jitter(position=position_jitter(width=.1, height=0),alpha=0.01)+theme_classic()+scale_color_manual(values = broad_cell_type_color)+ylab("Pattern 25")+ theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank())+ theme(axis.title.x=element_blank(),axis.text.x=element_blank(),axis.ticks.x=element_blank())
+
+p4 <- ggplot(pats, aes(x=assigned_cell_type, y=Pattern_33,color=assigned_cell_type)) + 
+    geom_boxplot(outlier.shape=NA) + #avoid plotting outliers twice
+    geom_jitter(position=position_jitter(width=.1, height=0),alpha=0.01)+theme_classic()+scale_color_manual(values = broad_cell_type_color)+ylab("Pattern 33")+ theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank())
+
+ggarrange(p1, p2, p3, p4,ncol = 1, nrow = 4,widths = 1, heights = 2)
+
+#### Repeat but for myeloid patterns
+
+Mgobj <- readRDS("myeloids_rerun_8_26_21.rds")
+Mgenes <- readRDS("../Ent + ICIs mice project data and objects/geneNamesCDS_myeloids_8_26_21.rds")
+Msamples <- readRDS("../Ent + ICIs mice project data and objects/sampleNamesCDS_myeloids_8_26_21.rds")
+MFL <- Mgobj@featureLoadings # gene pattern weights
+rownames(MFL) <- Mgenes
+myelPats <- data.frame(Mgobj@sampleFactors)
+rownames(myelPats) <- Msamples
+myelPats$clusters <- pData(cds_myeloids)$clusters
+myelPats$treatment <- pData(cds_myeloids)$treatment
+myelPats$treatment <- factor(myelPats$treatment,levels = c("V", "E", "EC", "EP","EPC"))
+
+# get top genes in patterns and combine into vector for heatmap
+topGenes <- c()
+for (pat in colnames(MFL)){
+  ena <- MFL[,pat]
+  names(ena) <- rownames(MFL)
+  topGenes <- c(topGenes,names(ena[order(ena,decreasing=TRUE)])[1:20])
+}
+topGenes <- unique(topGenes)
+pheatmap(MFL[topGenes,c("Pattern_3","Pattern_5","Pattern_6","Pattern_9","Pattern_11","Pattern_14")],scale="row")
+
+p1 <- plotNMF(cds_myeloids,myelPats$Pattern_3,"Pattern 3","no")
+p2 <- plotNMF(cds_myeloids,myelPats$Pattern_5,"Pattern 5","no")
+p3 <- plotNMF(cds_myeloids,myelPats$Pattern_6,"Pattern 6","no")
+p4 <- plotNMF(cds_myeloids,myelPats$Pattern_9,"Pattern 9","no")
+p5 <- plotNMF(cds_myeloids,myelPats$Pattern_11,"Pattern 11","no")
+p6 <- plotNMF(cds_myeloids,myelPats$Pattern_14,"Pattern 14","no")
+ggarrange(p1, p2, p3, p4, p5,p6, ncol = 1, nrow = 6,widths = 1, heights = 2)
+
+# Boxplots by cluster
+NMFggpboxCluster <- function(pattern){
+  ggplot(pats, aes(x=assigned_cell_type, y=pats[,pattern],color=assigned_cell_type)) + 
+    geom_boxplot(outlier.shape=NA) + #avoid plotting outliers twice
+    geom_jitter(position=position_jitter(width=.1, height=0),alpha=0.01)+theme_classic()+scale_color_manual(values = broad_cell_type_color)+ylab(pattern)+ theme(legend.position = "none") + theme(axis.title.x=element_blank(),axis.text.x=element_blank(),axis.ticks.x=element_blank())
+}
+
+sp1 <- NMFggpboxCluster("Pattern_3")
+p2 <- NMFggpboxCluster("Pattern_5")
+p3 <- NMFggpboxCluster("Pattern_6")
+p4 <- NMFggpboxCluster("Pattern_9")
+p5 <- NMFggpboxCluster("Pattern_11")
+p6 <- NMFggpboxCluster("Pattern_14")
+p6 <- ggplot(myelPats, aes(x=clusters, y=Pattern_14,color=clusters)) + 
+    geom_boxplot(outlier.shape=NA) + #avoid plotting outliers twice
+    geom_jitter(position=position_jitter(width=.1, height=0),alpha=0.01)+theme_minimal()+scale_color_manual(values = myeloid_color)+ylab("Pattern 14")+theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank())
+
+ggarrange(p1, p2, p3, p4, p5, p6, ncol = 1, nrow = 6,widths = 1, heights = 2)
+
+# Boxplots by treatment
+
+NMFggpboxTreatment <- function(pattern,threshold){
+  pat <- myelPats
+  pat <- filter(pat, Pattern_3 > threshold)
+  ggplot(pat, aes(x=treatment, y=pat[,pattern],color=treatment)) + 
+      geom_boxplot(outlier.shape=NA) + #avoid plotting outliers twice
+      geom_jitter(position=position_jitter(width=.1, height=0),alpha=0.1)+theme_minimal()+scale_color_manual(values = treatment_color)+ylab(pattern)+theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank())+ theme(axis.title.x=element_blank(),axis.text.x=element_blank(),axis.ticks.x=element_blank())
+}
+
+p1 <- NMFggpboxTreatment("Pattern_1",0.25)
+
+ggplot(myelPats[myelPats$treatment == "E"| myelPats$treatment == "V",], aes(x=treatment, y=Pattern_9,color=treatment)) + 
+    geom_boxplot(outlier.shape=NA) + #avoid plotting outliers twice
+    geom_jitter(position=position_jitter(width=.1, height=0),alpha=0.5)+theme_minimal()+scale_color_manual(values = treatment_color)+ylab("Pattern 9")+theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank())
+
+myelPats$treatment <- factor(myelPats$treatment,levels = c("V", "E", "EC", "EP","EPC"))
+
+ggarrange(p1, p2, p3, p4, p5, p6, ncol = 1, nrow = 6,widths = 1, heights = 2)
+```
+
+
+#### Cell cycle estimation using Tricycle
+```{r}
+library(tricycle)
+library(scatter)
+library(scattermore)
+pData(cds)$cell_cycle <- ""
+pData(cds)$theta <- ""
+for (partition in unique(pData(cds)$assigned_cell_type)){ # calculate theta estimate and cell cycle stage by partition and combine results
+  subset <- cds[,pData(cds)$assigned_cell_type == partition] #subset for partition of interest
+  sce <- SingleCellExperiment(list(logcounts=log2(exprs(subset)+1)))
+  rowData(sce)$Gene <- fData(subset)$gene_short_name
+  rowData(sce)$Accession <- rownames(subset)
+  triCDS <- project_cycle_space(sce)
+  # Project a single cell data set to pre-learned cell cycle space
+  scater::plotReducedDim(triCDS, dimred = "tricycleEmbedding") +
+      labs(x = "Projected PC1", y = "Projected PC2") +
+      ggtitle(sprintf("Projected cell cycle space (n=%d)",
+                      ncol(triCDS))) +
+      theme_bw(base_size = 14)
+  # Infer cell cycle position
+  triCDS <- estimate_cycle_position(triCDS)
+  # Infer cell cycle stages
+  triCDS <- estimate_Schwabe_stage(triCDS,gname.type = 'ENSEMBL',species = 'mouse')
+  # Save cell cycle estimates in pData - both continuous theta and stages
+  pData(cds)[colnames(triCDS),]$cell_cycle <- data.frame(lapply(data.frame(triCDS$CCStage), as.character), stringsAsFactors=FALSE)[,1]
+  pData(cds)[colnames(triCDS),]$theta <-  triCDS$tricyclePosition
+}
+write.table(pData(cds),"ccestimates.txt") 
+
+# load results
+cc <- read.table("ccestimates.txt")
+pData(cds)$theta <- cc$theta
+pData(cds)$cell_cycle <- cc$cell_cycle
+
+# plot cell cycle theta estimate on UMAP 
+ggplot(data.frame(reducedDims(cds)$UMAP),  aes(x = X1, y = X2, color = pData(cds)$theta))+
+    geom_point(size = 1) +
+    theme_classic()+
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank())+
+    scale_color_viridis(discrete = FALSE, option = "D")+
+    scale_fill_viridis(discrete = FALSE)+ggtitle("")+ylab("UMAP2") + xlab("UMAP1")+labs(color = "Theta estimate")
+
+# plot cell cycle stage estimate on UMAP - showing only cancer has differential topology wrt cell cycle
+ggplot(data.frame(reducedDims(cds)$UMAP),  aes(x = X1, y = X2, color = pData(cds)$cell_cycle))+
+  geom_point(size = 1) +
+  theme_classic()+
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())+
+    scale_fill_viridis(discrete = FALSE)+ggtitle("")+ylab("UMAP2") + xlab("UMAP1")+labs(color = "Cell Cycle Stage")
+
+# plot heatmap of proportion of cells in each cycle stage in each partition
+pheatmap(prop.table(table(cc$assigned_cell_type,cc$cell_cycle),1))
+
+# plot violins of theta estimate in each treatment
+ggplot(data.frame(pData(cds)), aes(x=treatment, y=theta,fill=treatment)) + 
+  geom_violin(trim=FALSE)+theme_classic()
+
+# plot violins of theta estimate in each broad cell type
+ggplot(data.frame(pData(cds)), aes(x=assigned_cell_type, y=theta,fill=assigned_cell_type)) + 
+  geom_violin(trim=FALSE)+theme_classic()+stat_summary()+scale_fill_manual(values=broad_cell_type_color)
+
+# plot violins of theta estimate in each myeloid cluster
+myelTheta <- pData(cds)[rownames(pData(cds_myeloids)),]
+myelTheta$clusters <- pData(cds_myeloids)$clusters
+ggplot(data.frame(myelTheta), aes(x=clusters, y=theta,fill=clusters)) + geom_violin(trim=FALSE)+theme_minimal()
+pheatmap(prop.table(table(myelTheta$clusters,myelTheta$cell_cycle),1))
+# in a specific cluster by treatment:
+pheatmap(prop.table(table(myelTheta[myelTheta$clusters=="M1",]$treatment,myelTheta[myelTheta$clusters=="M1",]$cell_cycle),1))
+
+#Treatment differences in specific clusters
+ggplot(data.frame(myelTheta[myelTheta$clusters=="M2",]), aes(x=treatment, y=theta,color=treatment)) + 
+    geom_boxplot(outlier.shape=NA) + #avoid plotting outliers twice
+    geom_jitter(position=position_jitter(width=.1, height=0),alpha=0.2)+theme_minimal()+scale_color_manual(values = treatment_color)+theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank())
+
+ t.test(myelTheta[myelTheta$clusters=="M2" & myelTheta$treatment=="EPC",]$theta,myelTheta[myelTheta$clusters=="M2" & myelTheta$treatment=="V",]$theta)
+```
+
+
+#### Differential expression / dot plot / regression models
+```{r}
+# Run monocle's gene expression plots, for broad cell types:
+marker_test_res <- top_markers(cds, group_cells_by="partition", 
+                               reference_cells=1000, cores=8)
+top_specific_markers <- marker_test_res %>%
+                            filter(fraction_expressing >= 0.10) %>%
+                            group_by(cell_group) %>%
+                            top_n(5, pseudo_R2)
+top_specific_marker_ids <- unique(top_specific_markers %>% pull(gene_id))
+plot_genes_by_group(cds,
+                    top_specific_marker_ids,
+                    group_cells_by="assigned_cell_type",
+                    ordering_type="maximal_on_diag",
+                    max.size=5)
+
+# Run monocle's gene expression plots, for myeloid cell types:
+marker_test_res <- top_markers(cds_myeloids, group_cells_by="cluster", 
+                               reference_cells=1000, cores=8)
+top_specific_markers <- marker_test_res %>%
+                            filter(fraction_expressing >= 0.30) %>%
+                            group_by(cell_group) %>%
+                            top_n(5, pseudo_R2)
+top_specific_marker_ids <- unique(top_specific_markers %>% pull(gene_id))
+plot_genes_by_group(cds_myeloids,
+                    top_specific_marker_ids,
+                    group_cells_by="clusters",
+                    ordering_type="maximal_on_diag",
+                    max.size=5)
+
+# Run monocle's gene expression plots, for lymphoid cell types:
+marker_test_res <- top_markers(cds_lymphoids, group_cells_by="cluster", reference_cells=1000, cores=8)
+top_specific_markers <- marker_test_res %>%
+                            filter(fraction_expressing >= 0.30) %>%
+                            group_by(cell_group) %>%
+                            top_n(5, pseudo_R2)
+top_specific_marker_ids <- unique(top_specific_markers %>% pull(gene_id))
+plot_genes_by_group(cds_lymphoids,
+                    top_specific_marker_ids,
+                    group_cells_by="clusters",
+                    ordering_type="maximal_on_diag",
+                    max.size=3)
+
+# correcting for sequencing run batch effect across cell types as well as cell cycle correction for cancers
+# comparing E to V and then combo treatments to E
+# saving results with all gene regressions for easier retrieval for Evanthia, filtering significant genes downstream
+
+# Cancer
+write.table(DE_model(cds[,colData(cds)$assigned_cell_type=="Cancer"],"V","E", "~treatment + run"),file = "DE_output/Cancer_E.txt") 
+for (treat in c("EP","EC","EPC")){
+  write.table(DE_model(cds[,colData(cds)$assigned_cell_type=="Cancer"],"E",treat, "~treatment + run"),file = paste0("DE_output/Cancer_",treat,".txt"))
+}
+write.table(DE_model(cds[,colData(cds)$assigned_cell_type=="Cancer"],"V","E", "~treatment + run + theta"),file = "DE_output/CancerCCCorrected_E.txt") 
+for (treat in c("EP","EC","EPC")){
+  write.table(DE_model(cds[,colData(cds)$assigned_cell_type=="Cancer"],"E",treat, "~treatment + run + theta"),file = paste0("DE_output/CancerCCCorrected_",treat,".txt"))
+}
+ 
+# CAFs
+write.table(DE_model(cds[,colData(cds)$assigned_cell_type=="CAFs"],"V","E", "~treatment + run"),file = "DE_output/CAFs_E.txt") 
+for (treat in c("EP","EC","EPC")){
+  write.table(DE_model(cds[,colData(cds)$assigned_cell_type=="CAFs"],"E",treat, "~treatment + run"),file = paste0("DE_output/CAFs_",treat,".txt"))
+ }
+ 
+# Myeloids
+for (clust in unique(pData(cds_myeloids)$clusters)){
+  write.table(DE_model(cds_myeloids[,colData(cds_myeloids)$clusters==clust],"V","E", "~treatment + run"),file = paste0("DE_output/",clust,"_E.txt")) 
+  for (treat in c("EP","EC","EPC")){
+    write.table(DE_model(cds_myeloids[,colData(cds_myeloids)$clusters==clust],"E",treat, "~treatment + run"),file = paste0("DE_output/",clust,"_",treat,".txt"))
+  }
+}
+
+# Lymphoids
+for (clust in unique(pData(cds_lymphoids)$clusters)){
+  write.table(DE_model(cds_lymphoids[,colData(cds_lymphoids)$clusters==clust],"V","E", "~treatment + run"),file = paste0("DE_osutput/",clust,"_E.txt")) 
+  for (treat in c("EP","EC","EPC")){
+    write.table(DE_model(cds_lymphoids[,colData(cds_lymphoids)$clusters==clust],"E",treat, "~treatment + run"),file = paste0("DE_output/",clust,"_",treat,".txt"))
+  }
+}
+
+#### Compile all significant results:
+treatments <- c("E","EC","EP","EPC")
+allclu <- c("Cancer","CancerCCCorrected","CAFs","M-MDSC","G-MDSC","DC","M1","M2","Monocytes","Treg","Th","Tc","B","Proliferating Myeloid") #includes all subtypes and cell cycle corrected cancer 
+
+#multiply estimate by -1 and save results to match treatment directionality in E vs. V (treatmentV term to treatmentE) comparisons: since regression is applied upon E across comparisons and in E vs. V E is the control
+# for (i in 1:length(allclu)){
+#   comp<-paste0(allclu[i],"_","E")
+#   DE_results <- read.table(paste0("DE_output/",allclu[i],"_E",".txt"))
+#   DE_results$estimate <- DE_results$estimate*(-1)
+#   DE_results[DE_results$term=="treatmentV",]$term <- "treatmentE"
+#   write.table(DE_results,file = paste0("DE_output/",allclu[i],"_E",".txt"))
+# }
+
+hmm <- matrix(ncol=length(allclu),nrow=4)
+colnames(hmm) <- allclu
+rownames(hmm) <- treatments
+filtered_DE_results <- data.frame()
+for (j in 1:length(treatments)){
+  for (i in 1:length(allclu)){
+    DE_results <- read.table(paste0("DE_output/",allclu[i],"_",treatments[j],".txt")) 
+    DE_results <- DE_results[DE_results$q_value<0.05,]
+    DE_results <- DE_results %>% filter(status != "FAIL",  term != "theta",  term != "runB", term != "runA" , term != "runpilot1",term != "runpilot2")
+    if (dim(DE_results)[1]>0){
+      DE_results$comparison <-""
+      DE_results$cluster <-allclu[i]
+      DE_results$comparison <- paste0(allclu[i],"_",treatments[j])
+      # Filter out mt, Rpl genes etc.
+      rps.genes <- grep("Rps",DE_results$gene_short_name)
+      rpl.genes <- grep("Rpl",DE_results$gene_short_name)
+      hsp.genes <- grep("Hsp",DE_results$gene_short_name)
+      mt.genes <- grep("mt-",DE_results$gene_short_name)
+      gm.genes <- grep("Gm",DE_results$gene_short_name)
+      remove <- c(rps.genes,rpl.genes,hsp.genes,mt.genes,gm.genes)
+      if (length(remove)>0){
+        DE_results<- DE_results[-remove,]
+      } else {
+            print(paste(allclu[i],treatments[j],"no genes filtered out"))
+      }
+      filtered_DE_results <- rbind(DE_results,filtered_DE_results)
+      hmm[treatments[j],allclu[i]] <- dim(data.frame((DE_results)))[1]
+    } else{
+          print(paste(allclu[i],treatments[j],"did NOT pass filtering step 1, 0 significant genes"))
+          hmm[treatments[j],allclu[i]] <- 0
+    }
+  }
+}
+pheatmap(hmm) # show how many genes are significant in each comparison
+write.csv(filtered_DE_results, "FDR_filtered_DE_genes_all_cell_types_8_26_21.csv")
+```
+
+
+#### RNA SEQ Analysis: MDSC cell line, DMSO vs. Entinostat
+```{r}
+library(limma)
+library(gplots)
+library(DT)
+load("../RNAseq_MDSC_cell_line_Ent_DMSO/abundanceDat.rda")
+
+boxplot(log2(abundanceDat+1),las=2,range=0,outline=F,ylab="log2 expression")
+logdat=log2(abundanceDat+1)
+ RowVar <- function(x) {
+    rowSums((x - rowMeans(x)) ^ 2) / (dim(x)[2] - 1)
+  }
+rv=RowVar(logdat)
+o=order(rv,decreasing=T)
+rvo=rv[o]
+
+sampClass=c("control","control","control","Ent","Ent","Ent")
+preBayed=preBayes(sampClass,logdat)
+combos=preBayed$var1
+fit=preBayed$var2
+design=preBayed$var3
+q2=0 # for holding the name/number of contrasts
+nc=unique(sampClass)
+
+for(i in 1:dim(combos)[2]){
+  w=combos[1,i]
+  u=combos[2,i]
+  x=paste(nc[u],"-",nc[w],sep=" ") # make the contrast for this combo - case minus control
+  y=paste(nc[u],"Vs",nc[w],sep=" ") # make the title for this combo
+  q2[i]=y
+  contrast.matrix = makeContrasts(contrasts=x, levels=design)
+  fit2= contrasts.fit(fit, contrast.matrix)
+  fit2= eBayes(fit2)
+  res2=topTable(fit2,number=dim(logdat)[1],adjust.method='BH',sort.by='B') # assign the topTable results to an object named tlist1 for example
+  thesec=c("logFC","AveExpr","t","B")
+  res2n=res2
+  res2n[,thesec[1]]=round(res2[,thesec[1]],  digits = 3)
+  res2n[,thesec[2]]=round(res2[,thesec[2]],  digits = 3)
+  res2n[,thesec[3]]=round(res2[,thesec[3]],  digits = 3)
+  res2n[,thesec[4]]=round(res2[,thesec[4]],  digits = 3)
+  #res2n[,"P.Value"]=round(res2[,"P.Value"],  digits = 6)
+  res2n[,"adj.P.Val"]=round(res2[,"adj.P.Val"],  digits = 6)
+  gc()
+  assign(paste("plist",i, sep=""),res2n)# assign the topTable results to an object named tlist1 for example
+}
+
+datatable(plist1) #table of DEG
+bulk <- plist1
+bulk$Genes <- toupper(rownames(bulk))
+bulk$term <- "Entinostat"
+bulk$status <- "ok"
+bulk$estimate <- bulk$t #statistic
+bulk$gene_short_name <- bulk$Genes
+write.table(as.matrix(bulk),file="DE_output/bulk_FullDE.txt",sep="\t",quote=FALSE,row.names = FALSE)
+heatmap.2(logdat[rownames(bulk)[1:20],],trace="none",scale="row",col=greenred,margins=c(10,5),main=c("Supervised","50 most different genes"),cexRow = 0.1) 
+annotation <- data.frame(c("DMSO Control","DMSO Control","DMSO Control","ENT","ENT","ENT"))
+colnames(annotation) <- c("Groups")
+rownames(annotation) <- colnames(logdat)
+pheatmap(logdat[rownames(bulk)[1:100],],scale = "row",fontsize_row=7,fontsize_col = 9,annotation = annotation)
+```
+
+
+#### DE Volcano plots
+```{r}
+DE_results <- read.csv('FDR_filtered_DE_genes_all_cell_types_8_26_21.csv',header = T,stringsAsFactors = F, sep=",")
+DE_results <- read.csv('unfiltered_DE_genes_all_cell_types_8_26_21.csv',header = T,stringsAsFactors = F, sep=",")
+
+DE_table<-DE_results[DE_results$comparison=="CancerCCCorrected_E",]
+rownames(DE_table)<-DE_table$gene_short_name
+plotVolcEstimateGG(DE_table,"Canaer E vs. V",dim(DE_table)[1])
+
+DE_table<-DE_results[DE_results$comparison=="M1_E",]
+rownames(DE_table)<-DE_table$gene_short_name
+p1 <- plotVolcEstimateGG(DE_table,"M1 E vs. V",dim(DE_table)[1])
+
+DE_table<-DE_results[DE_results$comparison=="M2_E",]
+rownames(DE_table)<-DE_table$gene_short_name
+p2 <- plotVolcEstimateGG(DE_table,"M2 E vs. V",dim(DE_table)[1])
+
+DE_table<-DE_results[DE_results$comparison=="M-MDSC_E",]
+rownames(DE_table)<-DE_table$gene_short_name
+p3 <- plotVolcEstimateGG(DE_table,"M-MDSC E vs. V",dim(DE_table)[1])
+
+DE_table<-DE_results[DE_results$comparison=="G-MDSC_E",]
+rownames(DE_table)<-DE_table$gene_short_name
+p4 <- plotVolcEstimateGG(DE_table,"G-MDSC E vs. V", dim(DE_table)[1])
+
+ggarrange(p1, p2, p3, p4, ncol = 4, nrow = 1,widths = 1, heights = 2)
+```
+
+
+#### KEGG Pathway analysis and barcode plots for single cell and bulk
+```{r}
+library(gage) #convert KEGG pathways from gage
+library(limma)
+library(org.Mm.eg.db)
+library(kableExtra)
+library(annotate)
+library(fgsea) 
+library(splitstackshape)
+sets <- kegg.gsets(species = "mmu", id.type = "kegg", check.new=FALSE)
+# convert entrez IDs to gene short names
+for (i in 1:length(sets$kg.sets)){
+  sets$kg.sets[[i]] <- toupper(unname(getSYMBOL(sets$kg.sets[[i]], data='org.Mm.eg.db')))
+}
+kegg <- sets$kg.sets
+#save(kegg,file="C:/Users/sidir/OneDrive - Johns Hopkins/FertigLab/Evanthia/Pathway_analysis/kegg_pathways.rda")
+
+# Load all pathways and combine into a master set
+load("C:/Users/sidir/OneDrive - Johns Hopkins/FertigLab/Evanthia/Paper_figures_code_metadata/Pathway_analysis/kegg_pathways.rda")
+load("C:/Users/sidir/OneDrive - Johns Hopkins/FertigLab/Evanthia/Paper_figures_code_metadata/Pathway_analysis/hallmark_pathways.rda")
+load("C:/Users/sidir/OneDrive - Johns Hopkins/FertigLab/Evanthia/Paper_figures_code_metadata/Pathway_analysis/myeloid_pathways.rda")
+load("C:/Users/sidir/OneDrive - Johns Hopkins/FertigLab/Evanthia/Paper_figures_code_metadata/Pathway_analysis/pancancer_pathways.rda")
+names(myeloid) <- paste0("Myeloid_",names(myeloid))
+names(kegg) <- paste0("KEGG_",names(kegg))
+names(pancancer) <- paste0("pancancer_",names(pancancer))
+masterSet <- c(kegg,myeloid,pancancer,hallmark_pathways)
+#save(masterSet,file="C:/Users/sidir/OneDrive - Johns Hopkins/FertigLab/Evanthia/Paper_figures_code_metadata/Pathway_analysis/masterSet.rda")
+#save(testSet, file="./Pathway_analysis/testSet.rda")
+load("./Pathway_analysis/masterSet.rda")
+load("./Pathway_analysis/testSet.rda")
+
+# Run limma gene set enrichment across all cell types and cluster comparisons in the single cell data
+sgst<-data.frame(pathways="",pval="",padj="",comparison="")
+sgst<-sgst[-1,]
+treatments <- c("E","EC","EP","EPC")
+allclu <- c("Cancer","CancerCCCorrected","CAFs","M-MDSC","G-MDSC","DC","M1","M2","Monocytes","Treg","Th","Tc","B","Proliferating Myeloid")
+genesets <- testSet #change to other pathways if necessary, or all pathways with masterSet
+for (j in 1:length(treatments)){
+  treatment <- treatments[j]
+  for (i in 1:length(allclu)){
+    comp<-paste0(allclu[i],"_",treatment)
+    DE_results <- read.table(paste0("DE_output/",allclu[i],"_",treatment,".txt")) 
+    DE_results <- DE_results %>% filter(status != "FAIL", term != "theta", term != "runB", term != "runA" , term != "runpilot1" , term != "runpilot2")
+    p<-rep(NA, length(genesets)) #up
+    pd<-rep(NA, length(genesets)) #down
+    names(p)<-names(genesets)
+    names(pd)<-names(genesets)
+    #change alternative to either for both directions, or up or down
+    for (k in names(genesets)) {
+      p[k] <- geneSetTest(index = which(toupper(DE_results$gene_short_name) %in% genesets[[k]]), statistics = DE_results$estimate, alternative = "up")
+    }
+    gst <- data.frame(pathways=names(p),pval=p)
+    gst$padj <- p.adjust(gst$pval, method="BH")
+    gst <- gst %>% filter(padj <0.05) #save significant pathways only
+    if (dim(gst)[1]>0){
+      gst$comparison <- paste0(comp,"_up")
+      sgst <- rbind(sgst,gst)
+    }
+    for (k in names(genesets)) {
+      pd[k] <- geneSetTest(index = which(toupper(DE_results$gene_short_name) %in% genesets[[k]]), statistics = DE_results$estimate, alternative = "down")
+    }
+    gstd <- data.frame(pathways=names(pd),pval=pd)
+    gstd$padj <- p.adjust(gstd$pval, method="BH")
+    gstd <- gstd %>% filter(padj <0.05)
+    if (dim(gstd)[1]>0){
+      gstd$comparison <- paste0(comp,"_down")
+      sgst <- rbind(sgst,gstd) #combine up and downregulated
+    }
+  }
+}
+sgst$grouped_comparison <- sgst$comparison 
+sgst <- cSplit(sgst, "comparison", "_")
+write.table(sgst,file="testSet_SC_pathway_results_8_26_21.txt")
+
+# Confirm sc results with fgsea
+fgRes <- fgsea::fgsea(pathways = masterSet, 
+                      stats = gene_list,
+                      minSize=10,
+                      maxSize=700,
+                      nperm=10000) 
+plotGseaTable(masterSet, SCgeneList("Cancer_E"), fgRes, gseaParam=0.5)
+
+# Plot sc results in tables and barcode plots:
+sgst <- read.table("updated_complete_SC_pathway_results_8_26_21.txt")
+res <- sgst[sgst$comparison_1 != "Cancer_E_up",-c(4)]
+colnames(res) <- c("Pathways","p value","q value", "Population","Comparison","Regulation")
+res$Comparison <- "Entinostat vs. Vehicle"
+res$Regulation <- "Upregulated"
+res  %>% kbl(caption = "Significanttly Enriched KEGG Pathways") %>% kable_classic_2(full_width = F)
+
+# Limma barcode plot
+plotLimmaBarcode("Cancer_E",testSet[["KEGG_MMU04612 ANTIGEN PROCESSING AND PRESENTATION"]],"KEGG_MMU04612 ANTIGEN PROCESSING AND PRESENTATION")
+
+# fgsea barcode plots
+p1 <- plotFGSEAbarcode("M2_EPC",masterSet[["HALLMARK_INTERFERON_GAMMA_RESPONSE"]],"HALLMARK_INTERFERON_GAMMA_RESPONSE, EPC vs. E in M2")
+p2 <- plotFGSEAbarcode("M2_EPC",masterSet[["HALLMARK_INTERFERON_ALPHA_RESPONSE"]],"HALLMARK_INTERFERON_ALPHA_RESPONSE, EPC vs. E in M2")
+p3 <- plotFGSEAbarcode("M-MDSC_E",masterSet[["HALLMARK_TNFA_SIGNALING_VIA_NFKB"]],"HALLMARK_TNFA_SIGNALING_VIA_NFKB, E vs. V in M-MDSC")
+
+# Dot plot of sc testSet results:
+sgst <- read.table("./testSet_SC_pathway_results_8_26_21.txt")
+colnames(sgst) <- c("Pathways","Pval","Padj","Group","Cluster","Treatment","Direction")
+sgst <- sgst[sgst$Cluster != "Cancer",]
+dot <- sgst[sgst$Treatment == "E",]
+ggplot(dot, aes(x = Cluster, y = Pathways)) + 
+               geom_point(aes(size = Padj, color = Direction)) +
+               theme_classic(base_size = 12) +
+        scale_colour_manual(values = c("down" = "red", "up" = "blue")) +
+        ylab(NULL) +
+        ggtitle("Bidirectional Pathway Enrichment by Cell Cluster in E vs V")+  theme(axis.text.x = element_text(angle = 45,hjust=1))
+
+#### Now run in Bulk DE:
+
+bulk<-read.table("bulk_FullDE.txt",header=TRUE)
+genesets <- testSet
+p<-rep(NA, length(genesets)) #up
+pd<-rep(NA, length(genesets)) #down
+names(p)<-names(genesets)
+names(pd)<-names(genesets)
+for (k in names(genesets)) { #upregulated
+  p[k] <- geneSetTest(index = which(toupper(bulk$Genes) %in% genesets[[k]]), statistics = bulk$t, alternative = "up")
+  }
+gst <- data.frame(pathways=names(p),pval=p)
+gst$padj <- p.adjust(gst$pval, method="BH")
+gst <- gst %>% filter(padj <0.05) #save significant pathways only
+gst$comparison <- "up"
+for (k in names(genesets)) { #downregulated
+  pd[k] <- geneSetTest(index = which(toupper(bulk$Genes) %in% genesets[[k]]), statistics = bulk$t, alternative = "down")
+  }
+gstd <- data.frame(pathways=names(pd),pval=pd)
+gstd$padj <- p.adjust(gstd$pval, method="BH")
+gstd <- gstd %>% filter(padj <0.05)
+gstd$comparison <- "down"
+bulkPathwayRes <- rbind(gst,gstd)
+#write.table(bulkPathwayRes,file="complete_Bulk_pathway_results_8_30_21_t.txt")
+write.table(bulkPathwayRes,file="testSet_Bulk_pathway_results_8_30_21_t.txt")
+
+## Confirm bulk results with fgsea
+gene_list = bulk$estimate
+names(gene_list) = toupper(as.character(bulk$Genes))
+gene_list = gene_list[!duplicated(names(gene_list))]
+gene_list = gene_list[!gene_list=="-Inf"]
+fgRes <- fgsea::fgsea(pathways = masterSet, 
+                      stats = gene_list,
+                      minSize=10,
+                      maxSize=700,
+                      nperm=10000) 
+topPathwaysUp <- fgRes[ES > 0][head(order(pval), n=10), pathway]
+topPathwaysDown <- fgRes[ES < 0][head(order(pval), n=10), pathway]
+topPathways <- c(topPathwaysUp, rev(topPathwaysDown))
+plotGseaTable(masterSet, gene_list, fgRes, gseaParam=0.5)
+plotGseaTable(masterSet[grepl("HALLMARK",names(masterSet))], gene_list, fgRes, gseaParam=0.5)
+
+## Plot bulk results in tables and barcode plots:
+plotLimmaBarcode("bulk_FullDE",masterSet[["HALLMARK_IL6_JAK_STAT3_SIGNALING"]],"HALLMARK_IL6_JAK_STAT3_SIGNALING")
+p1 <- plotFGSEAbarcode("bulk_FullDE",masterSet[["HALLMARK_TNFA_SIGNALING_VIA_NFKB"]],"HALLMARK_TNFA_SIGNALING_VIA_NFKB,q=7.98e-20") 
+p2 <- plotFGSEAbarcode("bulk_FullDE",masterSet[["HALLMARK_IL6_JAK_STAT3_SIGNALING"]],"HALLMARK_IL6_JAK_STAT3_SIGNALING")
+p3 <- plotFGSEAbarcode("bulk_FullDE",masterSet[["HALLMARK_IL2_STAT5_SIGNALING"]],"HALLMARK_IL2_STAT5_SIGNALING")
+p4 <- plotFGSEAbarcode("bulk_FullDE",masterSet[["KEGG_mmu04657 IL-17 signaling pathway"]],"mmu04657 IL-17 signaling pathway")
+p5 <- plotFGSEAbarcode("bulk_FullDE",masterSet[["KEGG_mmu04350 TGF-beta signaling pathway"]],"mmu04350 TGF-beta signaling pathway")
+p6 <- plotFGSEAbarcode("bulk_FullDE",masterSet[["KEGG_mmu04010 MAPK signaling pathway"]],"KEGG_mmu04010 MAPK signaling pathway")
+p7 <- plotFGSEAbarcode("bulk_FullDE",masterSet[["KEGG_mmu04612 Antigen processing and presentation"]],"KEGG_mmu04612 Antigen processing and presentation")
+p8 <- plotFGSEAbarcode("bulk_FullDE",masterSet[["KEGG_mmu04514 Cell adhesion molecules"]],"KEGG_mmu04514 Cell adhesion molecules")
+p8 <- plotFGSEAbarcode("bulk_FullDE",masterSet[["KEGG_mmu04514 Cell adhesion molecules"]],"KEGG_mmu04514 Cell adhesion molecules")
+p9 <- plotFGSEAbarcode("bulk_FullDE",masterSet[["HALLMARK_MYC_TARGETS_V2"]],"HALLMARK_MYC_TARGETS_V2")
+p1+p2+p3+p4+p5+p6+p7+p8+p9
+
+# Dot plot of bulk testSet results:
+dot <- read.table("./testSet_Bulk_pathway_results_8_30_21_t.txt")
+colnames(dot) <- c("Pathways","Pval","Padj","Direction")
+ggplot(dot, aes(x = Direction, y = Pathways)) + 
+               geom_point(aes(size = Padj, color = Direction)) +
+               theme_classic(base_size = 12) +
+        scale_colour_manual(values = c("down" = "red", "up" = "blue")) +
+        ylab(NULL) +
+        ggtitle("Pathway Enrichment in Treated J774M cells")+  theme(axis.text.x = element_text(angle = 45,hjust=1))
+
+#### Chip seq genes
+
+chipseq <- read.csv("../CHIP_SEQ/chip_seq_genes.csv")
+chipseqmat <- read.csv("../CHIP_SEQ/chipseq_pepr_matrix.csv")[,c("comparison","genename2","inputdat.score","inputdat.qvalue")]
+cs1 <- chipseqmat[chipseqmat$comparison==unique(chipseqmat$comparison)[1],]
+cs1 <- cs1[order(cs1$inputdat.score,decreasing = TRUE),][1:10,]
+colnames(cs1) <-c("Comparison","Gene","Score","q-value")
+cs2 <- chipseqmat[chipseqmat$comparison==unique(chipseqmat$comparison)[2],]
+cs2 <- cs2[order(cs2$inputdat.score,decreasing = TRUE),][1:10,]
+colnames(cs2) <-c("Comparison","Gene","Score","q-value")
+cs3 <- chipseqmat[chipseqmat$comparison==unique(chipseqmat$comparison)[3],]
+cs3 <- cs3[order(cs3$inputdat.score,decreasing = TRUE),][1:10,]
+colnames(cs3) <-c("Comparison","Gene","Score","q-value")
+cs4 <- chipseqmat[chipseqmat$comparison==unique(chipseqmat$comparison)[4],]
+cs4 <- cs4[order(cs4$inputdat.score,decreasing = TRUE),][1:10,]
+colnames(cs4) <-c("Comparison","Gene","Score","q-value")
+pepr <- rbind(cs1,cs2,cs3,cs4)
+pepr  %>% kbl(caption = "") %>% kable_classic_2(full_width = F)
+
+p10 <- plotFGSEAbarcode("bulk_FullDE",toupper(chipseq$DMSO_not_ENT_PePr_peaks_promoter),"DMSO_not_ENT_PePr_peaks_promoter")
+p11 <-plotFGSEAbarcode("bulk_FullDE",toupper(chipseq$ENT_not_DMSO_PePr_peaks_promrote),"ENT_not_DMSO_PePr_peaks_promrote")
+p12 <-plotFGSEAbarcode("bulk_FullDE",toupper(chipseq$DMSO_not_ENT_PePr_peaks_utr5p),"DMSO_not_ENT_PePr_peaks_utr5p")
+p13 <-plotFGSEAbarcode("bulk_FullDE",toupper(chipseq$ï..ENT_not_DMSO_PePr_peaks_utr5p),"ENT_not_DMSO_PePr_peaks_utr5p")
+p10+p11+p12+p13
+
+pval10 <- plotLimmaBarcode("bulk_FullDE",toupper(chipseq$DMSO_not_ENT_PePr_peaks_promoter),"DMSO_not_ENT_PePr_peaks_promoter")
+pval11 <-plotLimmaBarcode("bulk_FullDE",toupper(chipseq$ENT_not_DMSO_PePr_peaks_promrote),"ENT_not_DMSO_PePr_peaks_promrote")
+pval12 <-plotLimmaBarcode("bulk_FullDE",toupper(chipseq$DMSO_not_ENT_PePr_peaks_utr5p),"DMSO_not_ENT_PePr_peaks_utr5p")
+pval13 <-plotLimmaBarcode("bulk_FullDE",toupper(chipseq$ï..ENT_not_DMSO_PePr_peaks_utr5p),"ENT_not_DMSO_PePr_peaks_utr5p")
+```
+
+
+#### Single cell type composition analysis 
+```{r}
+#### Composition analysis for broad cell types 
+sum <- table(cds$assigned_cell_type, cds$treatment)
+total<-table(pData(cds)$treatment)
+# Normalize cell counts to total number of cells per treatment group
+sumtable_ptot <- t(apply(sum, 1, function(x) x/total))  
+sumtable_ptot <- melt(sumtable_ptot)
+colnames(sumtable_ptot)<-c("Cluster", "Treatment","Proportion")
+sumtable_ptot$Treatment <- factor(sumtable_ptot$Treatment,levels = c("V", "E", "EC", "EP","EPC"))
+data<-spread(data.frame(sumtable_ptot), key = Cluster, value = Proportion)
+rownames(data) <- data$Treatment
+data<-data[,-1] #rownames are the treatments
+# Add 2 lines to the dataframe: the max and min of each topic to show on the plot
+data <- rbind(rep(0.50,4) , rep(0,4), data) 
+data <- data*100
+
+# Prepare color
+colors_border=colormap(colormap=colormaps$phase, nshades=5, alpha=1)
+colors_in=colormap(colormap=colormaps$phase, nshades=5, alpha=0.1)
+
+#Barplot
+ggplot(sumtable_ptot, aes(fill=factor(Cluster), y=Proportion, x=Treatment)) + 
+  geom_bar(position="stack", stat="identity")+ggtitle("Cell Type Abundance") +labs(fill = "Group")+theme_minimal()+scale_fill_manual(values = alpha(broad_cell_type_color))
+
+#### Composition analysis for myeloid cell types 
+
+sum <- table(cds_myeloids$clusters, cds_myeloids$treatment)
+total<-table(pData(cds)$treatment)
+# Normalize cell counts to total number of cells per treatment group
+sumtable_ptot <- t(apply(sum, 1, function(x) x/total))  
+sumtable_ptot <- melt(sumtable_ptot)
+colnames(sumtable_ptot)<-c("Cluster", "Treatment","Proportion")
+sumtable_ptot$Treatment <- factor(sumtable_ptot$Treatment,levels = c("V", "E", "EC", "EP","EPC"))
+
+ggplot(sumtable_ptot, aes(fill=factor(Cluster), y=Proportion, x=Treatment)) +
+  geom_bar(position="stack", stat="identity") +labs(fill = "Treatment")+theme_minimal()+scale_fill_manual(values = alpha(myeloid_color))
+ 
+sumtable_ptot_wide <- dcast(sumtable_ptot, Treatment   ~ Cluster )
+rownames(sumtable_ptot_wide) <- sumtable_ptot_wide$Treatment
+pheatmap(sumtable_ptot_wide[,-1],scale = "column",cluster_cols  = FALSE)
+
+#### Composition analysis for lymphoid cell types 
+
+sum <- table(cds_lymphoids$clusters, cds_lymphoids$treatment)
+total<-table(pData(cds)$treatment)
+# Normalize cell counts to total number of cells per treatment group
+sumtable_ptot <- t(apply(sum, 1, function(x) x/total))  
+sumtable_ptot <- melt(sumtable_ptot)
+colnames(sumtable_ptot)<-c("Cluster", "Treatment","Proportion")
+sumtable_ptot$Treatment <- factor(sumtable_ptot$Treatment,levels = c("V", "E", "EC", "EP","EPC"))
+data<-spread(data.frame(sumtable_ptot), key = Cluster, value = Proportion)
+rownames(data) <- data$Treatment
+data<-data[,-1] #rownames are the treatments
+# add 2 lines to the dataframe: the max and min of each topic to show on the plot
+data <- rbind(rep(0.03,4) , rep(0,4), data) 
+data <- data*100
+
+ggplot(sumtable_ptot, aes(fill=factor(Cluster), y=Proportion, x=Treatment)) +
+  geom_bar(position="stack", stat="identity") +labs(fill = "Treatment")+theme_minimal()+scale_fill_manual(values = alpha(lymphoid_color))
+
+sumtable_ptot_wide <- dcast(sumtable_ptot, Treatment   ~ Cluster )
+rownames(sumtable_ptot_wide) <- sumtable_ptot_wide$Treatment
+pheatmap(sumtable_ptot_wide[,-1],scale = "column",cluster_cols  = FALSE)
+```
+
+
+#### Single cell composition ratios
+```{r}
+#### Ratios
+sum <- table(pData(cds_myeloids)$clusters, pData(cds_myeloids)$sample)
+total<-table(pData(cds)$sample)
+# Normalize cell counts to total number of cells per treatment group
+sumtable_ptot <- t(apply(sum, 1, function(x) x/total))  
+sumtable_ptot <- melt(sumtable_ptot)
+colnames(sumtable_ptot)<-c("Cluster", "Treatment","Proportion")
+#sumtable_ptot$Treatment <- factor(sumtable_ptot$Treatment,levels = c("V", "E", "EC", "EP","EPC"))
+data<-spread(data.frame(sumtable_ptot), key = Cluster, value = Proportion)
+rownames(data) <- data$Treatment
+data<-data[,-1] #rownames are the treatments
+# add 2 lines to the dataframe: the max and min of each topic to show on the plot
+data <- data*100
+data <- data[,c("M-MDSC","G-MDSC","Monocytes","M2","M1","DC","Prolif. Myeloid")] #order cell types
+
+data$treatment = ""
+for (i in rownames(data)){
+  data[rownames(data)==i,]$treatment <- unique(pData(cds_myeloids)[pData(cds_myeloids)$sample==i,]$treatment)
+}
+
+gmRatio <- data.frame(sample=rownames(data),ratio=data$`G-MDSC`/data$`M-MDSC`,treatment=data$treatment)
+gmRatio[gmRatio$ratio=="NaN",]$ratio<- 0
+m1m2Ratio <- data.frame(sample=rownames(data),ratio=data$M1/data$M2,treatment=data$treatment)
+
+gmRatio$treatment <- factor(gmRatio$treatment,levels = c("V", "E", "EC", "EP","EPC"))
+m1m2Ratio$treatment <- factor(m1m2Ratio$treatment,levels = c("V", "E", "EC", "EP","EPC"))
+
+t.test(m1m2Ratio[m1m2Ratio$treatment=="V",]$ratio,m1m2Ratio[m1m2Ratio$treatment=="E",]$ratio)
+t.test(m1m2Ratio[m1m2Ratio$treatment=="V",]$ratio,m1m2Ratio[m1m2Ratio$treatment=="EP",]$ratio)
+t.test(m1m2Ratio[m1m2Ratio$treatment=="V",]$ratio,m1m2Ratio[m1m2Ratio$treatment=="EC",]$ratio)
+t.test(m1m2Ratio[m1m2Ratio$treatment=="V",]$ratio,m1m2Ratio[m1m2Ratio$treatment=="EPC",]$ratio)
+t.test(m1m2Ratio[m1m2Ratio$treatment=="E",]$ratio,m1m2Ratio[m1m2Ratio$treatment=="EPC",]$ratio)
+
+ggplot(m1m2Ratio, aes(treatment, ratio))+  
+  geom_boxplot(show.legend = F, aes(fill=treatment))+
+  geom_jitter(width=0.2,color="brown",size=2)+
+  scale_fill_manual(values = treatment_color)+theme_bw()+ggtitle("M1/M2 Ratio by Tumor Sample")+stat_summary(fun=median, geom="point", shape=18, size=7,color="white")+theme_classic()
+
+t.test(gmRatio[gmRatio$treatment=="V",]$ratio,gmRatio[gmRatio$treatment=="E",]$ratio)
+t.test(gmRatio[gmRatio$treatment=="V",]$ratio,gmRatio[gmRatio$treatment=="EP",]$ratio)
+t.test(gmRatio[gmRatio$treatment=="V",]$ratio,gmRatio[gmRatio$treatment=="EC",]$ratio)
+t.test(gmRatio[gmRatio$treatment=="V",]$ratio,gmRatio[gmRatio$treatment=="EPC",]$ratio)
+t.test(gmRatio[gmRatio$treatment=="E",]$ratio,gmRatio[gmRatio$treatment=="EPC",]$ratio)
+
+ggplot(gmRatio, aes(treatment, ratio))+  
+  geom_boxplot(show.legend = F, aes(fill=treatment))+
+  geom_jitter(width=0.2,color="brown",size=2)+
+  scale_fill_manual(values = treatment_color)+theme_minimal()+ggtitle("G-MDSC/M-MDSC Ratio by Tumor Sample")+stat_summary(fun=median, geom="point", shape=18, size=7,color="white")+theme_classic()
+```
+
+
+#### Single cell myeloid trajectories, summary violins/heatmaps (genes, pseudotime, treatment)
+```{r}
+# M1 trajectory:
+M22M1 <- trajInfer(cds_myeloids[,pData(cds_myeloids)$clusters == "M1"],"")
+pData(M22M1)$treatment<-factor(pData(M22M1)$treatment,levels = c("V", "E","EC","EP","EPC"))
+ggplot(data.frame(pData(M22M1)), aes(x=treatment, y = pseudotime(M22M1),fill=treatment)) + geom_violin(trim=FALSE, color="black")+ stat_summary(fun=median, geom="point", shape=18, size=3,color="white")+ theme_classic()+scale_fill_manual(values = alpha(treatment_color))
+pData(cds_myeloids)$pseudotime_M1M2 <- ""
+pData(cds_myeloids)[colnames(M22M1),]$pseudotime_M1M2 <- as.numeric(pseudotime(M22M1))
+pData(M22M1)$pseudotime_M1M2 <- ""
+pData(M22M1)[colnames(M22M1),]$pseudotime_M1M2 <- as.numeric(pseudotime(M22M1))
+plot_pseudotime_umap(cds_myeloids[,pData(cds_myeloids)$assigned_cell_type!="MDSCs"],pData(cds_myeloids[,pData(cds_myeloids)$assigned_cell_type!="MDSCs"])$pseudotime_M1M2,"M1 to M2 Pseudotime")
+# Pseudotime Pvals:
+wilcox.test(as.numeric(pseudotime_M1M2)~treatment,data=pData(M22M1)[pData(M22M1)$treatment=="EPC"|pData(M22M1)$treatment=="E",])
+
+## M2 trajectory
+M22M1 <- trajInfer(cds_myeloids[,pData(cds_myeloids)$clusters == "M2" | pData(cds_myeloids)$clusters == "M2"],"")
+pData(M22M1)$treatment<-factor(pData(M22M1)$treatment,levels = c("V", "E","EC","EP","EPC"))
+ggplot(data.frame(pData(M22M1)), aes(x=treatment, y = pseudotime(M22M1),fill=treatment)) + geom_violin(trim=FALSE, color="black")+ stat_summary(fun=mean, geom="point", shape=18, size=3,color="white")+ theme_classic()+scale_fill_manual(values = alpha(treatment_color))
+pData(cds_myeloids)$pseudotime_M1M2 <- ""
+pData(cds_myeloids)[colnames(M22M1),]$pseudotime_M1M2 <- as.numeric(pseudotime(M22M1))
+pData(M22M1)$pseudotime_M1M2 <- ""
+pData(M22M1)[colnames(M22M1),]$pseudotime_M1M2 <- as.numeric(pseudotime(M22M1))
+plot_pseudotime_umap(cds_myeloids[,pData(cds_myeloids)$assigned_cell_type!="MDSCs"],pData(cds_myeloids[,pData(cds_myeloids)$assigned_cell_type!="MDSCs"])$pseudotime_M1M2,"M2 to M1 Pseudotime")
+# Pseudotime Pvals:
+wilcox.test(as.numeric(pseudotime_M1M2)~treatment,data=pData(M22M1)[pData(M22M1)$treatment=="E"|pData(M22M1)$treatment=="EPC",])
+# p-value = 0.001342
+wilcox.test(as.numeric(pseudotime_M1M2)~treatment,data=pData(M22M1)[pData(M22M1)$treatment=="V"|pData(M22M1)$treatment=="E",])
+# p-value = 1.518e-05
+
+## G- M-MDSC trajectory:
+G2M <- trajInfer(cds_myeloids[,pData(cds_myeloids)$clusters == "G-MDSC" | pData(cds_myeloids)$clusters == "M-MDSC"],"")
+pData(G2M)$treatment<-factor(pData(G2M)$treatment,levels = c("V", "E","EC","EP","EPC"))
+ggplot(data.frame(pData(G2M)), aes(x=treatment, y = pseudotime(G2M),fill=treatment)) + geom_violin(trim=FALSE, color="black")+ stat_summary(fun=median, geom="point", shape=18, size=3,color="white")+ theme_classic()+scale_fill_manual(values = alpha(treatment_color))
+pData(cds_myeloids)$pseudotime_mdsc <- ""
+pData(cds_myeloids)[colnames(G2M),]$pseudotime_mdsc <- as.numeric(pseudotime(G2M))
+pData(G2M)$pseudotime_mdsc <- ""
+pData(G2M)[colnames(G2M),]$pseudotime_mdsc <- as.numeric(pseudotime(G2M))
+plot_pseudotime_umap(cds_myeloids[,pData(cds_myeloids)$assigned_cell_type=="MDSCs"],pData(cds_myeloids[,pData(cds_myeloids)$assigned_cell_type=="MDSCs"])$pseudotime_mdsc,"G- to M-MDSC Pseudotime")
+# Pseudotime Pvals:
+wilcox.test(as.numeric(pseudotime_mdsc)~treatment,data=pData(G2M)[pData(G2M)$treatment=="E"|pData(G2M)$treatment=="EPC",])
+# p-value = 9.165e-07
+wilcox.test(as.numeric(pseudotime_mdsc)~treatment,data=pData(G2M)[pData(G2M)$treatment=="V"|pData(G2M)$treatment=="E",])
+# p-value = 2.2e-16
+
+## Heatmaps
+col_fun = colorRamp2(c(0, 15), c("white","darkgreen")) #set color scale pseudotime
+genesMacro <-c("Mrc1", "H2-Ab1","H2-Aa","H2-Eb1","H2-DMa","Cd163","Arg1","Fcer1g","Cxcr4","H2-K1","Ccl9","Tnfaip2","Spp1","Fabp5","Tnf","Mgp","Ccl8","Cd68","Ccl6","Cd86","Cxcl2","Ccl2","Il6","Il1b") 
+cdsM <- M22M1[,pData(M22M1)$treatment == "E"|pData(M22M1)$treatment =="V"]
+rownames(cdsM) <- fData(cdsM)$gene_short_name
+sampOrder <- order(as.numeric(pData(cdsM)$pseudotime_M1M2))
+pdat <- pData(cdsM[,sampOrder])
+Exprs <-as.matrix(exprs(cdsM[genesMacro,]))
+Exprs <- Exprs[,rownames(pdat)]
+Exprs <- apply(Exprs,2,scale)
+rownames(Exprs) <- rownames(cdsM[genesMacro,])
+#colors <- c("grey","orange","black")
+#names(colors) <- unique(pdat$day)
+columnHA <- HeatmapAnnotation(Treatment=pdat$treatment,Cluster=pdat$clusters,Pseudotime=as.numeric(pdat$pseudotime_M1M2),Pattern_9 = myelPats[colnames(Exprs),]$Pattern_9,Pattern_3 = myelPats[colnames(Exprs),]$Pattern_3, col = list(Treatment = treatment_color[1:2], Cluster = myeloid_color[4:5], Pseudotime = col_fun))
+#columnHA <- HeatmapAnnotation(Timepoint = pdat$day, Treatment=pdat$treatment, col = list(Treatment = c("L1" = "red","VE"="blue"),Timepoint=colors))
+#rowHA <- rowAnnotation(Annotations = genes_ann, col = list(Annotations = c("G1" = "#FF6666", "G2" = "lightblue")))
+Heatmap(t(scale(t(Exprs))), cluster_columns = F,cluster_rows = T, 
+        clustering_distance_rows = 'pearson',
+        name="Expression",
+        show_column_names = F,
+        #right_annotation = rowHA,
+        top_annotation = columnHA)
+
+genesMDSC <- c("S100a9","S100a8","Fcer1g","Cd52","Tnf","Arg2","Il1r2","Ptpn6","Il1b","Cd14","Srgn","Ifitm1")
+cdsM <- G2M[,pData(G2M)$treatment == "E"|pData(G2M)$treatment =="V"]
+rownames(cdsM) <- fData(cdsM)$gene_short_name
+sampOrder <- order(as.numeric(pData(cdsM)$pseudotime_mdsc))
+pdat <- pData(cdsM[,sampOrder])
+Exprs <-as.matrix(exprs(cdsM[genesMDSC,]))
+Exprs <- Exprs[,rownames(pdat)]
+Exprs <- apply(Exprs,2,scale)
+rownames(Exprs) <- rownames(cdsM[genesMDSC])
+columnHA <- HeatmapAnnotation(Treatment=pdat$treatment,Cluster=pdat$clusters,Pseudotime=as.numeric(pdat$pseudotime_mdsc),Pattern_5 = myelPats[colnames(Exprs),]$Pattern_5,Pattern_14 = myelPats[colnames(Exprs),]$Pattern_14 , col = list(Treatment = treatment_color[1:2], Pseudotime =col_fun, Cluster = myeloid_color[1:2]))
+Heatmap(t(scale(t(Exprs))), cluster_columns = F,cluster_rows = T, 
+        clustering_distance_rows = 'pearson',
+        name="Expression",
+        show_column_names = F,
+        #right_annotation = rowHA,
+        top_annotation = columnHA)
+```
