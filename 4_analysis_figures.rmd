@@ -285,7 +285,7 @@ p3 <- ggplot(pats, aes(x=assigned_cell_type, y=Pattern_25,color=assigned_cell_ty
 p4 <- ggplot(pats, aes(x=assigned_cell_type, y=Pattern_33,color=assigned_cell_type)) + 
     geom_boxplot(outlier.shape=NA) + #avoid plotting outliers twice
     geom_jitter(position=position_jitter(width=.1, height=0),alpha=0.01)+theme_classic()+scale_color_manual(values = broad_cell_type_color)+ylab("Pattern 33")+ theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank())
-
+ 
 ggarrange(p1, p2, p3, p4,ncol = 1, nrow = 4,widths = 1, heights = 2)
 
 #### Repeat but for myeloid patterns
