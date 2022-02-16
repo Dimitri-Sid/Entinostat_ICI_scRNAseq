@@ -254,7 +254,7 @@ topGenes <- c()
 for (pat in colnames(FL)){
   ena <- FL[,pat]
   names(ena) <- rownames(FL)
-  topGenes <- c(topGenes,names(ena[order(ena,decreasing=TRUE)])[1:5])
+  topGenes <- c(topGenes,names(ena[order(ena,decreasing=TRUE)])[1])
 }
 topGenes <- unique(topGenes)
 pheatmap(FL[topGenes,c("Pattern_14","Pattern_4","Pattern_25","Pattern_33")],scale="row")
@@ -306,7 +306,7 @@ topGenes <- c()
 for (pat in colnames(MFL)){
   ena <- MFL[,pat]
   names(ena) <- rownames(MFL)
-  topGenes <- c(topGenes,names(ena[order(ena,decreasing=TRUE)])[1:20])
+  topGenes <- c(topGenes,names(ena[order(ena,decreasing=TRUE)])[1:3])
 }
 topGenes <- unique(topGenes)
 pheatmap(MFL[topGenes,c("Pattern_3","Pattern_5","Pattern_6","Pattern_9","Pattern_11","Pattern_14")],scale="row")
